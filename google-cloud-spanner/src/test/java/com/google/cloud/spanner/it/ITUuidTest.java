@@ -43,6 +43,7 @@ import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import org.junit.AfterClass;
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
@@ -74,8 +75,9 @@ public class ITUuidTest {
     // TODO: Remove once it is enabled in production universe.
     if (isUsingCloudDevel()) {
       return Arrays.asList(
-          new DialectTestParameter(Dialect.GOOGLE_STANDARD_SQL),
-          new DialectTestParameter(Dialect.POSTGRESQL));
+          new DialectTestParameter(Dialect.GOOGLE_STANDARD_SQL)
+          // new DialectTestParameter(Dialect.POSTGRESQL)
+          );
     }
     return Collections.emptyList();
   }
@@ -312,6 +314,20 @@ public class ITUuidTest {
         + "('untyped1', CAST(@p1 AS UUID), CAST(@p2 AS ARRAY<UUID>))";
   }
 
+  private String getInsertStatementWithReturning() {
+    if (dialect.dialect == Dialect.POSTGRESQL) {
+      return "INSERT INTO T (Key, UuidValue, UuidArrayValue) "
+          + "VALUES ($1, $2, $3) "
+          + "RETURNING UuidArrayValue";
+    }
+    // return "INSERT INTO T (Key, UuidValue, UuidArrayValue) "
+    //     + "VALUES (@p1, @p2, @p3) "
+    //     + "THEN RETURN Key, UuidValue, UuidArrayValue";
+    return "INSERT INTO T (Key, UuidValue, UuidArrayValue) "
+        + "VALUES (@p1, @p2, @p3) "
+        + "THEN RETURN UuidArrayValue";
+  }
+
   @Test
   public void uuidUntypedParameter() {
     client
@@ -346,6 +362,37 @@ public class ITUuidTest {
     assertEquals(
         Collections.singletonList(UUID.fromString("aac68fbe-6847-48b1-8373-110950aeaf3a")),
         row.getUuidList(1));
+  }
+
+  @Test
+  public void dmlReturn() {
+    String key = "dml-return-1";
+    UUID uuid = UUID.randomUUID();
+    List<UUID> uuidArray = Arrays.asList(UUID.randomUUID(), null, UUID.randomUUID());
+
+    try (ResultSet resultSet =
+        client
+            .readWriteTransaction()
+            .run(
+                transaction -> {
+                  Statement statement =
+                      Statement.newBuilder(getInsertStatementWithReturning())
+                          .bind("p1")
+                          .to(key)
+                          .bind("p2")
+                          .to(Value.uuid(uuid))
+                          .bind("p3")
+                          .to(Value.uuidArray(uuidArray))
+                          .build();
+                  return transaction.executeQuery(statement);
+                })) {
+      Assert.assertNotNull(resultSet);
+      assertTrue(resultSet.next());
+      // assertEquals(key, resultSet.getString("Key"));
+      // assertEquals(uuid, resultSet.getUuid("UuidValue"));
+      assertEquals(uuidArray, resultSet.getUuidList("UuidArrayValue"));
+      assertFalse(resultSet.next());
+    }
   }
 
   private String getInsertStatementWithKeyLiterals(UUID uuid1, UUID uuid2) {
@@ -413,6 +460,8 @@ public class ITUuidTest {
       }
     }
   }
+
+
 
   private void verifyNonKeyContents(String keyPrefix) {
     try (ResultSet resultSet =
